@@ -12,6 +12,7 @@ import fast_bilinear
 from helpers import set_extension
 from testing import assert_equal, assert_true
 import os 
+from collections import Optional
 
 from decompress import *
 from compress import *
@@ -21,29 +22,32 @@ alias LIBC_NAME = "libc.so.6"
 alias BPP = 4
 
 struct LibJpeg:
-    var _handle      : ffi.DLHandle
-    var _handle_libc : ffi.DLHandle
-    var _libc_good   : Bool
-    var _good        : Bool 
+    var _handle      : Optional[ffi.DLHandle]
+    var _handle_libc : Optional[ffi.DLHandle]
 
     fn __init__(inout self):
-        self._handle = ffi.DLHandle(LIBJPEG_NAME, ffi.RTLD.NOW)
-        self._good = self._handle.__bool__()
-        self._handle_libc = ffi.DLHandle(LIBC_NAME, ffi.RTLD.NOW)
-        self._libc_good = self._handle_libc.__bool__()        
-        if not self._good:
-            print("Unable to load ",LIBJPEG_NAME)
+        self._handle_libc = Optional[ffi.DLHandle](None)
+        self._handle = Optional[ffi.DLHandle](None)
+        var handle = ffi.DLHandle(LIBJPEG_NAME, ffi.RTLD.NOW)
+        if handle.__bool__():
+            self._handle = Optional[ffi.DLHandle](handle)
+            var handle_libc = ffi.DLHandle(LIBC_NAME, ffi.RTLD.NOW)
+            if handle_libc.__bool__():
+                self._handle_libc = Optional[ffi.DLHandle](handle_libc)
+            else:
+                print("Unable to load ",LIBC_NAME,". Some features like ICC profiles'll be unavailable")
         else:
-            if not self._libc_good:
-                print("Unable to load ",LIBC_NAME,". Some features like ICC profiles'll be unavailable")            
+            print("Unable to load ",LIBJPEG_NAME)
 
     fn __del__(owned self):
-        self._handle_libc.close()
-        self._handle.close()
+        if self._handle_libc:
+            self._handle_libc.value()[].close()
+        if self._handle:
+            self._handle.value()[].close()
 
     @always_inline
     fn is_ok(self) -> Bool:
-        return self._good
+        return self._handle
 
     fn get_file_dimensions(self, filename : String) raises -> JpegImage:
         """
@@ -54,7 +58,7 @@ struct LibJpeg:
             if the file is not a valid jpeg file, the width and height will be 0.
         """
         var result = JpegImage(filename)
-        if Path(result.filename).is_file() and self._good:
+        if Path(result.filename).is_file() and self.is_ok():
             var bytes = List[SIMD[DType.uint8,1]](capacity=32768)
             with open(result.filename, "rb") as f:
                 # Don't need all the bytes to get the dimensions, just enough bytes for the header'll be enough.
@@ -75,27 +79,28 @@ struct LibJpeg:
             if the bytes doesn't represent a valid jpeg file, the width and height will be 0.
             TODO : need to handle the error from LibJpeg.
         """
-        jpeg.clear()        
+        jpeg.clear()
         if self.is_ok():
+            var handle = self._handle.value()[]
             var err = JpegErrorMgr()
             var ptr_err = UnsafePointer[JpegErrorMgr](err) 
             var cinfo = JpegDecompressStruct()
-            cinfo.err = self._handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
+            cinfo.err = handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
             var size = sizeof[JpegDecompressStruct]()  
             var ptr_cinfo = UnsafePointer[JpegDecompressStruct](cinfo)
-            var void = self._handle.get_function[jpeg_create_decompress]("jpeg_CreateDecompress")(ptr_cinfo, JPEG_LIB_VERSION, size)
-            void = self._handle.get_function[jpeg_mem_src]("jpeg_mem_src")(ptr_cinfo, bytes.data, bytes.size)
-            void = self._handle.get_function[jpeg_save_markers]("jpeg_save_markers")(ptr_cinfo, JPEG_APP0 + 2, 0xFFFF)
-            void = self._handle.get_function[jpeg_read_header]("jpeg_read_header")(ptr_cinfo, C_Bool_True)
+            _ = handle.get_function[jpeg_create_decompress]("jpeg_CreateDecompress")(ptr_cinfo, JPEG_LIB_VERSION, size)
+            _ = handle.get_function[jpeg_mem_src]("jpeg_mem_src")(ptr_cinfo, bytes.data, bytes.size)
+            _ = handle.get_function[jpeg_save_markers]("jpeg_save_markers")(ptr_cinfo, JPEG_APP0 + 2, 0xFFFF)
+            _ = handle.get_function[jpeg_read_header]("jpeg_read_header")(ptr_cinfo, C_Bool_True)
             cinfo.out_color_space = J_COLOR_SPACE_DEFAULT  # doesn't really matter as long as it is a legal value
-            void = self._handle.get_function[jpeg_calc_output_dimensions]("jpeg_calc_output_dimensions")(ptr_cinfo)
+            _ = handle.get_function[jpeg_calc_output_dimensions]("jpeg_calc_output_dimensions")(ptr_cinfo)
             jpeg.set_dimensions(cinfo.image_width, cinfo.image_height, cinfo.image_width, cinfo.image_height)
             jpeg._rotated = False                      
-            void = self._handle.get_function[jpeg_destroy_decompress]("jpeg_destroy_decompress")(ptr_cinfo)
+            _ = handle.get_function[jpeg_destroy_decompress]("jpeg_destroy_decompress")(ptr_cinfo)
 
     fn from_path(self, filename : Path, dimensions : ParamsDimensions) raises -> JpegImage:
         var result = JpegImage(filename.__str__())
-        if filename.is_file() and self._good:
+        if filename.is_file() and self.is_ok():
             var bytes = List[SIMD[DType.uint8,1]](capacity=filename.stat().st_size)
             with open(filename, "rb") as f:
                 # Don't need all the bytes to get the dimensions, just enough bytes for the header'll be enough.
@@ -115,26 +120,28 @@ struct LibJpeg:
     fn decompress(self, bytes : List[SIMD[DType.uint8,1]], dimensions : ParamsDimensions, inout image : JpegImage) -> Bool:
         var result = False
         if self.is_ok() and bytes.size>256: # one can't really have a well formed JPEG's file of less than 256 bytes
+            var handle = self._handle.value()[]
             var err = JpegErrorMgr()
             var ptr_err = UnsafePointer[JpegErrorMgr](err) 
             var cinfo = JpegDecompressStruct()
-            cinfo.err = self._handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
+            cinfo.err = handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
             var size = sizeof[JpegDecompressStruct]()  
             var ptr_cinfo = UnsafePointer[JpegDecompressStruct](cinfo)
-            var void = self._handle.get_function[jpeg_create_decompress]("jpeg_CreateDecompress")(ptr_cinfo, JPEG_LIB_VERSION, size)
-            void = self._handle.get_function[jpeg_mem_src]("jpeg_mem_src")(ptr_cinfo, bytes.data, bytes.size)
-            void = self._handle.get_function[jpeg_save_markers]("jpeg_save_markers")(ptr_cinfo, JPEG_APP0 + 2, 0xFFFF) # to be able to get the ICC profile
-            void = self._handle.get_function[jpeg_read_header]("jpeg_read_header")(ptr_cinfo, C_Bool_True)
+            _ = handle.get_function[jpeg_create_decompress]("jpeg_CreateDecompress")(ptr_cinfo, JPEG_LIB_VERSION, size)
+            _ = handle.get_function[jpeg_mem_src]("jpeg_mem_src")(ptr_cinfo, bytes.data, bytes.size)
+            _ = handle.get_function[jpeg_save_markers]("jpeg_save_markers")(ptr_cinfo, JPEG_APP0 + 2, 0xFFFF) # to be able to get the ICC profile
+            _ = handle.get_function[jpeg_read_header]("jpeg_read_header")(ptr_cinfo, C_Bool_True)
             cinfo.out_color_space = J_COLOR_SPACE_DEFAULT  # maybe later I'll add other color spaces
-            void = self._handle.get_function[jpeg_calc_output_dimensions]("jpeg_calc_output_dimensions")(ptr_cinfo)
+            _ = handle.get_function[jpeg_calc_output_dimensions]("jpeg_calc_output_dimensions")(ptr_cinfo)
             
             # ICC my friend, where art thou ? only if we could call "free"
-            if self._libc_good:                                
+            if self._handle_libc:                                
+                var handle_libc = self._handle_libc.value()[]
                 var icc_jpeg_ptr = UnsafePointer[UInt8]()  # *mut uint8 and null ptr
                 var icc_jpeg_ptr2 = UnsafePointer[UnsafePointer[UInt8]](icc_jpeg_ptr)  # *mut *mut uint8
                 var icc_data_len:UInt32 = 0
                 var icc_data_len_ptr = UnsafePointer[UInt32](icc_data_len) 
-                if self._handle.get_function[jpeg_read_icc_profile]("jpeg_read_icc_profile")(ptr_cinfo, icc_jpeg_ptr2, icc_data_len_ptr):
+                if handle.get_function[jpeg_read_icc_profile]("jpeg_read_icc_profile")(ptr_cinfo, icc_jpeg_ptr2, icc_data_len_ptr):
                     image.icc.clear()    
                     # why the copy ? because icc_jpeg_ptr has been allocated outside Mojo       
                     for idx in range(icc_data_len):                
@@ -143,7 +150,7 @@ struct LibJpeg:
                     # by calling free from the libc (linux) or whatever library is used with this function on other OSes
                     # Obviously, asking Mojo do de-allocate himself this memory is a recipe for disaster :-)
                     # I need link libc just for that line :-)
-                    _ = self._handle_libc.get_function[libc_free]("free")(icc_jpeg_ptr)
+                    _ = handle_libc.get_function[libc_free]("free")(icc_jpeg_ptr)
                 
             # original size
             var full_width = cinfo.output_width
@@ -170,7 +177,7 @@ struct LibJpeg:
                     cinfo.scale_denom = 1
 
             # this is a slow function !
-            void = self._handle.get_function[jpeg_start_decompress]("jpeg_start_decompress")(ptr_cinfo)
+            _ = handle.get_function[jpeg_start_decompress]("jpeg_start_decompress")(ptr_cinfo)
 
             image.set_dimensions(cinfo.output_width, cinfo.output_height, full_width, full_height)            
             var offset = 0
@@ -178,11 +185,11 @@ struct LibJpeg:
             while cinfo.output_scanline < cinfo.output_height:
                 var adr = image.pixels.offset(offset)
                 var jsamparray = UnsafePointer[DTypePointer[DType.uint8, AddressSpace.GENERIC]](adr)
-                _ = self._handle.get_function[jpeg_read_scanlines]("jpeg_read_scanlines")(ptr_cinfo, jsamparray, 1)
+                _ = handle.get_function[jpeg_read_scanlines]("jpeg_read_scanlines")(ptr_cinfo, jsamparray, 1)
                 offset += stride
 
-            void = self._handle.get_function[jpeg_finish_decompress]("jpeg_finish_decompress")(ptr_cinfo)                        
-            void = self._handle.get_function[jpeg_destroy_decompress]("jpeg_destroy_decompress")(ptr_cinfo)
+            _ = handle.get_function[jpeg_finish_decompress]("jpeg_finish_decompress")(ptr_cinfo)                        
+            _ = handle.get_function[jpeg_destroy_decompress]("jpeg_destroy_decompress")(ptr_cinfo)
             result = True
             if need_downscale:
                 if found>=2:
@@ -200,10 +207,11 @@ struct LibJpeg:
             var err = JpegErrorMgr()
             var ptr_err = UnsafePointer[JpegErrorMgr](err) 
             var cinfo = JpegCompressStruct()
-            cinfo.err = self._handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
+            var handle = self._handle.value()[]
+            cinfo.err = handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
             var size = sizeof[JpegCompressStruct]()
             var ptr_cinfo = UnsafePointer[JpegCompressStruct](cinfo)
-            _ = self._handle.get_function[jpeg_create_compress]("jpeg_CreateCompress")(ptr_cinfo, JPEG_LIB_VERSION, size)   
+            _ = handle.get_function[jpeg_create_compress]("jpeg_CreateCompress")(ptr_cinfo, JPEG_LIB_VERSION, size)   
 
             var buffer_size = UInt64(buffer_dest.size)
             var dest_ptr = buffer_dest.unsafe_ptr()
@@ -211,13 +219,13 @@ struct LibJpeg:
             # we use a pointer on uint64 to get the real size of buffer_dest. More at the end of the function
             # by the way, I don't like the way it works but we're working with an old codebase, so ...
             var ptr_buffersize = UnsafePointer[SIMD[DType.uint64,1]](buffer_size)
-            _ = self._handle.get_function[jpeg_mem_dest]("jpeg_mem_dest")(ptr_cinfo, dest_ptr_ptr, ptr_buffersize)
+            _ = handle.get_function[jpeg_mem_dest]("jpeg_mem_dest")(ptr_cinfo, dest_ptr_ptr, ptr_buffersize)
             cinfo.image_width = width
             cinfo.image_height = height
             cinfo.input_components = 4
             cinfo.in_color_space = J_COLOR_SPACE_DEFAULT
             cinfo.data_precision = params.data_precision # only 8 bits for now
-            _ = self._handle.get_function[jpeg_set_defaults]("jpeg_set_defaults")(ptr_cinfo)
+            _ = handle.get_function[jpeg_set_defaults]("jpeg_set_defaults")(ptr_cinfo)
 
             # The accurate DCT/IDCT algorithms are now the default for both compression and decompression,
             # since the "fast" algorithms are considered to be a legacy feature. (The "fast" algorithms
@@ -235,13 +243,13 @@ struct LibJpeg:
             cinfo.X_density = params.x_density
             cinfo.Y_density = params.y_density
             
-            _ = self._handle.get_function[jpeg_set_quality]("jpeg_set_quality")(ptr_cinfo, params.compression, C_Bool_True)
-            _ = self._handle.get_function[jpeg_start_compress]("jpeg_start_compress")(ptr_cinfo, C_Bool_True)
+            _ = handle.get_function[jpeg_set_quality]("jpeg_set_quality")(ptr_cinfo, params.compression, C_Bool_True)
+            _ = handle.get_function[jpeg_start_compress]("jpeg_start_compress")(ptr_cinfo, C_Bool_True)
             # even without libc, we can write the ICC profile
             if icc_profile.size>0:
                 var ptr = icc_profile.unsafe_ptr()
                 var size = Int32(icc_profile.size)
-                _ = self._handle.get_function[jpeg_write_icc_profile]("jpeg_write_icc_profile")(ptr_cinfo, ptr, size )
+                _ = handle.get_function[jpeg_write_icc_profile]("jpeg_write_icc_profile")(ptr_cinfo, ptr, size )
 
             var index = 0
             var stride = Int(cinfo.image_width.cast[DType.int32]().value) * Int(cinfo.input_components.cast[DType.int32]().value)
@@ -249,12 +257,12 @@ struct LibJpeg:
             while cinfo.next_scanline < cinfo.image_height:
                 var adr = bytes.offset(index)
                 var jsamparray = UnsafePointer[DTypePointer[DType.uint8, AddressSpace.GENERIC]](adr)
-                var n = self._handle.get_function[jpeg_write_scanlines]("jpeg_write_scanlines")(ptr_cinfo, jsamparray, 1 )
+                var n = handle.get_function[jpeg_write_scanlines]("jpeg_write_scanlines")(ptr_cinfo, jsamparray, 1 )
                 index += stride * n.cast[DType.int32]().value
 
             # the correct value of buffer_size will be determined by jpeg_finish_compress
-            _ = self._handle.get_function[jpeg_finish_compress]("jpeg_finish_compress")(ptr_cinfo)                     
-            _ = self._handle.get_function[jpeg_destroy_compress]("jpeg_destroy_compress")(ptr_cinfo)
+            _ = handle.get_function[jpeg_finish_compress]("jpeg_finish_compress")(ptr_cinfo)                     
+            _ = handle.get_function[jpeg_destroy_compress]("jpeg_destroy_compress")(ptr_cinfo)
 
             # buffer_size should contains the real size of buffer_dest
             buffer_dest.resize(buffer_size.cast[DType.int64]().value,0)
@@ -492,7 +500,7 @@ fn validation() raises:
 
 fn validation_libjpeg() raises :
     var libjpeg = LibJpeg()
-    assert_true(libjpeg._good)
+    assert_true(libjpeg.is_ok())
     var img = libjpeg.get_file_dimensions("test/image.jpg")
     assert_equal(img.get_width(),314)
     assert_equal(img.get_full_width(),314)

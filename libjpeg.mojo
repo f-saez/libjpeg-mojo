@@ -143,7 +143,7 @@ struct LibJpeg:
                     # by calling free from the libc (linux) or whatever library is used with this function on other OSes
                     # Obviously, asking Mojo do de-allocate himself this memory is a recipe for disaster :-)
                     # I need link libc just for that line :-)
-                    self._handle_libc.get_function[libc_free]("free")(icc_jpeg_ptr)
+                    _ = self._handle_libc.get_function[libc_free]("free")(icc_jpeg_ptr)
                 
             # original size
             var full_width = cinfo.output_width
@@ -178,7 +178,7 @@ struct LibJpeg:
             while cinfo.output_scanline < cinfo.output_height:
                 var adr = image.pixels.offset(offset)
                 var jsamparray = UnsafePointer[DTypePointer[DType.uint8, AddressSpace.GENERIC]](adr)
-                self._handle.get_function[jpeg_read_scanlines]("jpeg_read_scanlines")(ptr_cinfo, jsamparray, 1)
+                _ = self._handle.get_function[jpeg_read_scanlines]("jpeg_read_scanlines")(ptr_cinfo, jsamparray, 1)
                 offset += stride
 
             void = self._handle.get_function[jpeg_finish_decompress]("jpeg_finish_decompress")(ptr_cinfo)                        
@@ -203,7 +203,7 @@ struct LibJpeg:
             cinfo.err = self._handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
             var size = sizeof[JpegCompressStruct]()
             var ptr_cinfo = UnsafePointer[JpegCompressStruct](cinfo)
-            var void = self._handle.get_function[jpeg_create_compress]("jpeg_CreateCompress")(ptr_cinfo, JPEG_LIB_VERSION, size)   
+            _ = self._handle.get_function[jpeg_create_compress]("jpeg_CreateCompress")(ptr_cinfo, JPEG_LIB_VERSION, size)   
 
             var buffer_size = UInt64(buffer_dest.size)
             var dest_ptr = buffer_dest.unsafe_ptr()
@@ -211,13 +211,13 @@ struct LibJpeg:
             # we use a pointer on uint64 to get the real size of buffer_dest. More at the end of the function
             # by the way, I don't like the way it works but we're working with an old codebase, so ...
             var ptr_buffersize = UnsafePointer[SIMD[DType.uint64,1]](buffer_size)
-            void = self._handle.get_function[jpeg_mem_dest]("jpeg_mem_dest")(ptr_cinfo, dest_ptr_ptr, ptr_buffersize)
+            _ = self._handle.get_function[jpeg_mem_dest]("jpeg_mem_dest")(ptr_cinfo, dest_ptr_ptr, ptr_buffersize)
             cinfo.image_width = width
             cinfo.image_height = height
             cinfo.input_components = 4
             cinfo.in_color_space = J_COLOR_SPACE_DEFAULT
             cinfo.data_precision = params.data_precision # only 8 bits for now
-            void = self._handle.get_function[jpeg_set_defaults]("jpeg_set_defaults")(ptr_cinfo)
+            _ = self._handle.get_function[jpeg_set_defaults]("jpeg_set_defaults")(ptr_cinfo)
 
             # The accurate DCT/IDCT algorithms are now the default for both compression and decompression,
             # since the "fast" algorithms are considered to be a legacy feature. (The "fast" algorithms
@@ -235,13 +235,13 @@ struct LibJpeg:
             cinfo.X_density = params.x_density
             cinfo.Y_density = params.y_density
             
-            void = self._handle.get_function[jpeg_set_quality]("jpeg_set_quality")(ptr_cinfo, params.compression, C_Bool_True)
-            void = self._handle.get_function[jpeg_start_compress]("jpeg_start_compress")(ptr_cinfo, C_Bool_True)
+            _ = self._handle.get_function[jpeg_set_quality]("jpeg_set_quality")(ptr_cinfo, params.compression, C_Bool_True)
+            _ = self._handle.get_function[jpeg_start_compress]("jpeg_start_compress")(ptr_cinfo, C_Bool_True)
             # even without libc, we can write the ICC profile
             if icc_profile.size>0:
                 var ptr = icc_profile.unsafe_ptr()
                 var size = Int32(icc_profile.size)
-                void = self._handle.get_function[jpeg_write_icc_profile]("jpeg_write_icc_profile")(ptr_cinfo, ptr, size )
+                _ = self._handle.get_function[jpeg_write_icc_profile]("jpeg_write_icc_profile")(ptr_cinfo, ptr, size )
 
             var index = 0
             var stride = Int(cinfo.image_width.cast[DType.int32]().value) * Int(cinfo.input_components.cast[DType.int32]().value)
@@ -253,8 +253,8 @@ struct LibJpeg:
                 index += stride * n.cast[DType.int32]().value
 
             # the correct value of buffer_size will be determined by jpeg_finish_compress
-            void = self._handle.get_function[jpeg_finish_compress]("jpeg_finish_compress")(ptr_cinfo)                     
-            void = self._handle.get_function[jpeg_destroy_compress]("jpeg_destroy_compress")(ptr_cinfo)
+            _ = self._handle.get_function[jpeg_finish_compress]("jpeg_finish_compress")(ptr_cinfo)                     
+            _ = self._handle.get_function[jpeg_destroy_compress]("jpeg_destroy_compress")(ptr_cinfo)
 
             # buffer_size should contains the real size of buffer_dest
             buffer_dest.resize(buffer_size.cast[DType.int64]().value,0)

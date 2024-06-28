@@ -129,8 +129,8 @@ struct JpegDecompressStruct:
         self.image_width = 0
         self.image_height = 0
         self.num_components = 0
-        self.jpeg_color_space = J_COLOR_SPACE_DEFAULT
-        self.out_color_space = J_COLOR_SPACE_DEFAULT
+        self.jpeg_color_space = JpegColorSpace.default().value()
+        self.out_color_space = JpegColorSpace.default().value()
         self.scale_num = 0
         self.scale_denom = 0
         self.output_gamma = 0.

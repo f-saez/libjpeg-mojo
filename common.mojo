@@ -16,24 +16,65 @@ alias JSAMPLE = UInt8
 alias JPEG_LIB_VERSION: Int32 = 62
 
 alias J_COLOR_SPACE = UInt32
-alias J_COLOR_SPACE_JCS_UNKNOWN = 0
-alias J_COLOR_SPACE_JCS_GRAYSCALE = 1
-alias J_COLOR_SPACE_JCS_RGB = 2
-alias J_COLOR_SPACE_JCS_YCbCr = 3
-alias J_COLOR_SPACE_JCS_CMYK = 4
-alias J_COLOR_SPACE_JCS_YCCK = 5
-alias J_COLOR_SPACE_JCS_EXT_RGB = 6
-alias J_COLOR_SPACE_JCS_EXT_RGBX = 7
-alias J_COLOR_SPACE_JCS_EXT_BGR = 8
-alias J_COLOR_SPACE_JCS_EXT_BGRX = 9
-alias J_COLOR_SPACE_JCS_EXT_XBGR = 10
-alias J_COLOR_SPACE_JCS_EXT_XRGB = 11
-alias J_COLOR_SPACE_JCS_EXT_RGBA = 12
-alias J_COLOR_SPACE_JCS_EXT_BGRA = 13
-alias J_COLOR_SPACE_JCS_EXT_ABGR = 14
-alias J_COLOR_SPACE_JCS_EXT_ARGB = 15
-alias J_COLOR_SPACE_JCS_RGB565 = 16
-alias J_COLOR_SPACE_DEFAULT = J_COLOR_SPACE_JCS_EXT_BGRA
+
+# "an enum ! an enum ! my kingdom for an enum !"
+# it works but is higly inefficient
+@value
+struct JpegColorSpace:
+    var __value : J_COLOR_SPACE
+    var __bpp : Int  #  bytes per pixels
+
+    fn __init__(inout self, value : J_COLOR_SPACE, bpp : Int):
+        self.__value = value
+        self.__bpp = bpp
+        
+    @staticmethod
+    fn grayscale() -> Self:
+        return Self(1,1)
+
+    @staticmethod
+    fn rgb() -> Self:
+        return Self(6,3)
+
+    @staticmethod
+    fn rgbx() -> Self:
+        return Self(7,4)
+
+    @staticmethod
+    fn rbgr() -> Self:
+        return Self(8,4)
+
+    @staticmethod
+    fn bgrx() -> Self:
+        return Self(9,4)
+
+    @staticmethod
+    fn rgba() -> Self:
+        return Self(12,4)
+
+    @staticmethod
+    fn bgra() -> Self:
+        return Self(13,4)
+
+    @staticmethod
+    fn abgr() -> Self:
+        return Self(14,4)
+
+    @staticmethod
+    fn argb() -> Self:
+        return Self(15,4)
+
+    @staticmethod
+    fn default() -> Self:
+        return Self.bgra()
+
+    @always_inline
+    fn value(self) -> J_COLOR_SPACE:
+        return self.__value
+    
+    @always_inline
+    fn bpp(self) -> Int:
+        return self.__bpp
 
 alias J_DCT_METHOD = UInt32
 alias J_DCT_METHOD_JDCT_ISLOW = 0

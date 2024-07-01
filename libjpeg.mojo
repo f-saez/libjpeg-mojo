@@ -26,10 +26,8 @@ alias DEFAULT_ICC_PROFILE = "icc_profiles/RTv4_sRGB.icc"
 struct LibJpeg:
     var _handle      : ffi.DLHandle
     var _handle_libc : Optional[ffi.DLHandle]
-    var __destroyed  : Bool
 
     fn __init__(inout self, handle : ffi.DLHandle, handle_libc : Optional[ffi.DLHandle]):
-        self.__destroyed = False
         self._handle = handle
         self._handle_libc = handle_libc
 
@@ -49,16 +47,12 @@ struct LibJpeg:
             print("Unable to load ",LIBJPEG_NAME)
         return result
 
-    # destructor are called at least two times when I use Optional so I have to close the lib by hand
-    # https://github.com/modularml/mojo/issues/3131
-    fn close(inout self):
-        if not self.__destroyed:
-            if self._handle_libc:
-                self._handle_libc.value()[].close()
-            self._handle.close()
-            self.__destroyed = True
+    fn __del__(owned self):
+        if self._handle_libc:
+            self._handle_libc.value()[].close()
+        self._handle.close()
 
-    fn get_file_dimensions(self, filename : String) raises -> JpegImage:
+    fn get_file_dimensions(self, filename : String) raises -> Optional[JpegImage]:
         """
         Get_file_dimensions():
             return the width and the height of a JPEG file.
@@ -66,18 +60,19 @@ struct LibJpeg:
                 a JpegImage struct
             if the file is not a valid jpeg file, the width and height will be 0.
         """
-        var result = JpegImage(filename)
-        if not self.__destroyed:
-            if Path(result.filename).is_file():
-                var bytes = List[SIMD[DType.uint8,1]](capacity=32768)
-                with open(result.filename, "rb") as f:
-                    # Don't need all the bytes to get the dimensions, just enough bytes for the header'll be enough.
-                    # Knowing the header may incorporate EXIF data and an ICC profile, it can be tricky to how exactly how much bytes
-                    # this function'll need. 
-                    # It seems 32768 bytes is more than enough for all the cases I've seen in 15 years
-                    bytes = f.read_bytes(32768)   
-                if bytes.size>0:
-                    self.get_image_dimensions(bytes, result)
+        var result = Optional[JpegImage](None)
+        if Path(filename).is_file():
+            var bytes = List[SIMD[DType.uint8,1]](capacity=32768)
+            with open(filename, "rb") as f:
+                # Don't need all the bytes to get the dimensions, just enough bytes for the header'll be enough.
+                # Knowing the header may incorporate EXIF data and an ICC profile, it can be tricky to how exactly how much bytes
+                # this function'll need. 
+                # It seems 32768 bytes is more than enough for all the cases I've seen in 15 years
+                bytes = f.read_bytes(32768)   
+            if bytes.size>0:
+                var image = JpegImage(filename)
+                self.get_image_dimensions(bytes, image)
+                result = Optional[JpegImage](image)
         return result
 
     fn get_image_dimensions(self, bytes : List[SIMD[DType.uint8,1]], inout jpeg : JpegImage):
@@ -92,26 +87,25 @@ struct LibJpeg:
             TODO : need to handle the error from LibJpeg.
         """
         jpeg.clear()
-        if not self.__destroyed:
-            var err = JpegErrorMgr()
-            var ptr_err = UnsafePointer[JpegErrorMgr](err) 
-            var cinfo = JpegDecompressStruct()
-            cinfo.err = self._handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
-            var size = sizeof[JpegDecompressStruct]()  
-            var ptr_cinfo = UnsafePointer[JpegDecompressStruct](cinfo)
-            _ = self._handle.get_function[jpeg_create_decompress]("jpeg_CreateDecompress")(ptr_cinfo, JPEG_LIB_VERSION, size)
-            _ = self._handle.get_function[jpeg_mem_src]("jpeg_mem_src")(ptr_cinfo, bytes.data, bytes.size)
-            _ = self._handle.get_function[jpeg_save_markers]("jpeg_save_markers")(ptr_cinfo, JPEG_APP0 + 2, 0xFFFF)
-            _ = self._handle.get_function[jpeg_read_header]("jpeg_read_header")(ptr_cinfo, C_Bool_True)
-            cinfo.out_color_space = JpegColorSpace.default().value()  # doesn't really matter as long as it is a legal value
-            _ = self._handle.get_function[jpeg_calc_output_dimensions]("jpeg_calc_output_dimensions")(ptr_cinfo)
-            jpeg.set_dimensions(cinfo.image_width, cinfo.image_height, cinfo.image_width, cinfo.image_height)
-            jpeg._rotated = False                      
-            _ = self._handle.get_function[jpeg_destroy_decompress]("jpeg_destroy_decompress")(ptr_cinfo)
+        var err = JpegErrorMgr()
+        var ptr_err = UnsafePointer[JpegErrorMgr](err) 
+        var cinfo = JpegDecompressStruct()
+        cinfo.err = self._handle.get_function[jpeg_std_error]("jpeg_std_error")(ptr_err)
+        var size = sizeof[JpegDecompressStruct]()  
+        var ptr_cinfo = UnsafePointer[JpegDecompressStruct](cinfo)
+        _ = self._handle.get_function[jpeg_create_decompress]("jpeg_CreateDecompress")(ptr_cinfo, JPEG_LIB_VERSION, size)
+        _ = self._handle.get_function[jpeg_mem_src]("jpeg_mem_src")(ptr_cinfo, bytes.data, bytes.size)
+        _ = self._handle.get_function[jpeg_save_markers]("jpeg_save_markers")(ptr_cinfo, JPEG_APP0 + 2, 0xFFFF)
+        _ = self._handle.get_function[jpeg_read_header]("jpeg_read_header")(ptr_cinfo, C_Bool_True)
+        cinfo.out_color_space = JpegColorSpace.default().value()  # doesn't really matter as long as it is a legal value
+        _ = self._handle.get_function[jpeg_calc_output_dimensions]("jpeg_calc_output_dimensions")(ptr_cinfo)
+        jpeg.set_dimensions(cinfo.image_width, cinfo.image_height, cinfo.image_width, cinfo.image_height)
+        jpeg._rotated = False                      
+        _ = self._handle.get_function[jpeg_destroy_decompress]("jpeg_destroy_decompress")(ptr_cinfo)
 
     fn from_path(self, filename : Path, dimensions : ParamsDimensions, cs : JpegColorSpace) raises -> Optional[JpegImage]:
         var result = Optional[JpegImage](None)
-        if filename.is_file() and not self.__destroyed:
+        if filename.is_file():
             var bytes = List[SIMD[DType.uint8,1]](capacity=filename.stat().st_size)
             with open(filename, "rb") as f:
                 # Don't need all the bytes to get the dimensions, just enough bytes for the header'll be enough.
@@ -131,7 +125,7 @@ struct LibJpeg:
     # I could add Gray8
     fn decompress(self, bytes : List[SIMD[DType.uint8,1]], dimensions : ParamsDimensions, inout image : JpegImage, cs : JpegColorSpace) -> Bool:
         var result = False
-        if bytes.size>256 and not self.__destroyed: # one can't really have a well formed JPEG's file of less than 256 bytes
+        if bytes.size>256: # one can't really have a well formed JPEG's file of less than 256 bytes
             var err = JpegErrorMgr()
             var ptr_err = UnsafePointer[JpegErrorMgr](err) 
             var cinfo = JpegDecompressStruct()
@@ -212,7 +206,7 @@ struct LibJpeg:
     fn compress(self, bytes : DTypePointer[DType.uint8, AddressSpace.GENERIC], width : UInt32, height : UInt32, params : ParamsCompression, icc_profile : List[SIMD[DType.uint8,1]], cs : JpegColorSpace) -> List[SIMD[DType.uint8,1]]:
         var num_bytes = Int(width.cast[DType.int32]().value) * Int(height.cast[DType.int32]().value) * cs.bpp()
         var buffer_dest =  List[SIMD[DType.uint8,1]](capacity=num_bytes)
-        if width>0 and height>0 and not self.__destroyed: # rgbx32 mandatory, for now
+        if width>0 and height>0: # rgbx32 mandatory, for now
             # to avoid any kind of memory trouble, I work with a buffer sized as a uncompressed image and will downsized it later.
             buffer_dest.resize(num_bytes,0)
             var err = JpegErrorMgr()
@@ -284,17 +278,14 @@ struct LibJpeg:
 
     fn to_path(self, file_name : Path, img : JpegImage, params : ParamsCompression, cs : JpegColorSpace) raises -> Bool:
         var result = False
-        if not self.__destroyed:
-            var filename = set_extension(file_name,"jpg")
-            var bytes = self.compress(img.pixels, img.get_width(), img.get_height(), params, img.icc, cs)
-            var t = bytes.size
-            if t>1:
-                bytes.append(bytes[t-1]) # write remove the last byte of everything, string or not, so ...
-                with open(filename, "wb") as f:
-                    f.write(bytes)  # expect a string but is happy to accept a bunch of bytes (why ?), except it just eat the last byte thinking it's a zero-terminal string 
-                    result = True  
-        else:
-            print("the library is already been destroyed")
+        var filename = set_extension(file_name,"jpg")
+        var bytes = self.compress(img.pixels, img.get_width(), img.get_height(), params, img.icc, cs)
+        var t = bytes.size
+        if t>1:
+            bytes.append(bytes[t-1]) # write remove the last byte of everything, string or not, so ...
+            with open(filename, "wb") as f:
+                f.write(bytes)  # expect a string but is happy to accept a bunch of bytes (why ?), except it just eat the last byte thinking it's a zero-terminal string 
+                result = True  
         return result
 
 
@@ -520,7 +511,6 @@ struct JpegImage(Stringable):
                     if bb:
                         var profile = bb.value()[]
                         result = self.convert_to_icc_profile(ctx, profile^)
-                    ctx.close()
                     
         return result
 
@@ -566,31 +556,33 @@ fn validation_libjpeg() raises :
     var cs = JpegColorSpace.default()
     var aaa = LibJpeg.new()
     assert_true(aaa)
-    var libjpeg = aaa.value()[]
-    var img = libjpeg.get_file_dimensions("test/image.jpg")
-    assert_equal(img.get_width(),314)
-    assert_equal(img.get_full_width(),314)
-    assert_equal(img.get_height(),471)
-    assert_equal(img.get_full_height(),471)
-    assert_equal(img.icc.size,0) # get_file_dimensions doesn't take care of the profile yet, so it 0
+    var libjpeg = aaa.value()
+    var bbb = libjpeg[].get_file_dimensions("test/image.jpg")
+    assert_true(bbb)
+    var img = bbb.value()
+    assert_equal(img[].get_width(),314)
+    assert_equal(img[].get_full_width(),314)
+    assert_equal(img[].get_height(),471)
+    assert_equal(img[].get_full_height(),471)
+    assert_equal(img[].icc.size,0) # get_file_dimensions doesn't take care of the profile yet, so it 0
 
     var dim = ParamsDimensions.new_width(220)
-    var bbb = libjpeg.from_path(Path("test/image_icc.jpg"), dim, cs)
+    bbb = libjpeg[].from_path(Path("test/image_icc.jpg"), dim, cs)
     assert_true(bbb)
-    img = bbb.value()[]
-    assert_equal(img.get_width(),224)
-    assert_equal(img.get_full_width(),314)
-    assert_equal(img.get_height(),336)
-    assert_equal(img.get_full_height(),471)
-    assert_equal(img.icc.size,748)    
+    img = bbb.value()
+    assert_equal(img[].get_width(),224)
+    assert_equal(img[].get_full_width(),314)
+    assert_equal(img[].get_height(),336)
+    assert_equal(img[].get_full_height(),471)
+    assert_equal(img[].icc.size,748)    
     
-    var result = img.to_ppm(Path("test/image_tempo.ppm"))
+    var result = img[].to_ppm(Path("test/image_tempo.ppm"))
     assert_true(result)
     assert_true( helpers.compare_files(Path("test/image_tempo.ppm"), Path("test/image_tempo_ref.ppm")) )
     os.path.path.remove("test/image_tempo.ppm")
 
     var params_compress = ParamsCompression(98,False)
-    result = img.to_jpeg(Path("test/image_tempo.jpg"), params_compress, libjpeg, cs)
+    result = img[].to_jpeg(Path("test/image_tempo.jpg"), params_compress, libjpeg[], cs)
     assert_true(result)
     assert_true( helpers.compare_files(Path("test/image_tempo.jpg"), Path("test/image_tempo_ref.jpg")) )
     os.path.path.remove("test/image_tempo.jpg")
@@ -601,50 +593,49 @@ fn validation_libjpeg() raises :
     assert_true( helpers.compare_files(Path("test/image_tempo.ppm"), Path("test/image_tempo_ref.ppm")) )
     os.path.path.remove("test/image_tempo.ppm")
 
-    img = libjpeg.get_file_dimensions("test/image_Rec2020.jpg")
-    assert_equal(img.get_width(),314)
-    assert_equal(img.get_full_width(),314)
-    assert_equal(img.get_height(),471)
-    assert_equal(img.get_full_height(),471)
-    assert_equal(img.icc.size,0)
+    bbb = libjpeg[].get_file_dimensions("test/image_Rec2020.jpg")
+    assert_true(bbb)
+    img = bbb.value()
+    assert_equal(img[].get_width(),314)
+    assert_equal(img[].get_full_width(),314)
+    assert_equal(img[].get_height(),471)
+    assert_equal(img[].get_full_height(),471)
+    assert_equal(img[].icc.size,0)
 
     dim = ParamsDimensions.new()
-    bbb = libjpeg.from_path(Path("test/image.jpg"), dim, cs)
+    bbb = libjpeg[].from_path(Path("test/image.jpg"), dim, cs)
     assert_true(bbb)
-    img = bbb.value()[]
-    assert_equal(img.get_width(),312)
-    assert_equal(img.get_full_width(),314)
-    assert_equal(img.get_height(),468)
-    assert_equal(img.get_full_height(),471)
-    assert_equal(img.icc.size,0)
+    img = bbb.value()
+    assert_equal(img[].get_width(),312)
+    assert_equal(img[].get_full_width(),314)
+    assert_equal(img[].get_height(),468)
+    assert_equal(img[].get_full_height(),471)
+    assert_equal(img[].icc.size,0)
 
     var aa = lcms2.LCMS2Context.new()
     assert_true(aa)
-    var ctx = aa.value()[]
-    var profile2 = lcms2.LCMS2ICCProfile.from_path(ctx, Path("test/DCI-P3 D65.icc"))
+    var ctx = aa.value()
+    var profile2 = lcms2.LCMS2ICCProfile.from_path(ctx[], Path("test/DCI-P3 D65.icc"))
     assert_true(profile2)
     var profile_DCIP3 = profile2.value()[]
     var size_DCIP3 = profile_DCIP3.bytes.size
-    result = img.convert_to_icc_profile(ctx, profile_DCIP3^)
+    result = img[].convert_to_icc_profile(ctx[], profile_DCIP3^)
     assert_true(result)
 
-    ctx.close()
 
-    result = img.to_jpeg(Path("test/image_tempo.jpg"), params_compress, libjpeg, cs)
+    result = img[].to_jpeg(Path("test/image_tempo.jpg"), params_compress, libjpeg[], cs)
     assert_true(result)
-    img.clear()
+    img[].clear()
 
-    bbb = libjpeg.from_path(Path("test/image_tempo.jpg"), dim, cs)
+    bbb = libjpeg[].from_path(Path("test/image_tempo.jpg"), dim, cs)
     assert_true(bbb)
     img = bbb.value()[]
-    assert_equal(img.get_width(),312)
-    assert_equal(img.get_full_width(),312)
-    assert_equal(img.get_height(),468)
-    assert_equal(img.get_full_height(),468)
-    assert_equal(img.icc.size,size_DCIP3)
+    assert_equal(img[].get_width(),312)
+    assert_equal(img[].get_full_width(),312)
+    assert_equal(img[].get_height(),468)
+    assert_equal(img[].get_full_height(),468)
+    assert_equal(img[].icc.size,size_DCIP3)
     os.path.path.remove("test/image_tempo.jpg")
-    img.clear()
-    libjpeg.close()
 
 fn main() raises:
     validation_libjpeg()

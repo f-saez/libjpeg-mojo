@@ -139,12 +139,10 @@ struct LibLCMS2InfoType:
 struct LCMS2Context:
     var _handle          : UnsafePointer[UInt8]
     var _liblcms2_handle : ffi.DLHandle
-    var __destroyed      : Bool  # Until I understand why the detructor is called two times
 
     fn __init__(inout self, handle : UnsafePointer[UInt8], liblcms2_handle : ffi.DLHandle):
         self._handle = handle
         self._liblcms2_handle = liblcms2_handle
-        self.__destroyed = False
 
     @staticmethod
     fn new() -> Optional[Self]:
@@ -162,13 +160,9 @@ struct LCMS2Context:
             result = Optional[Self](LCMS2Context(handle, liblcms2_handle))
         return result
 
-    # I've got big trouble if I put this code inside the destructor. I need to understand why the destructor is called mutiples times
-    # https://github.com/modularml/mojo/issues/3131
-    fn close(inout self):
-        if not self.__destroyed:
-            _ =  self.get_liblcms2_handle().get_function[cmsDeleteContext]("cmsDeleteContext")(self._handle)
-            self._liblcms2_handle.close()
-            self.__destroyed = True
+    fn __del__(owned self):
+        _ =  self.get_liblcms2_handle().get_function[cmsDeleteContext]("cmsDeleteContext")(self._handle)
+        self._liblcms2_handle.close()
 
     @always_inline
     fn get_liblcms2_handle(self) -> ffi.DLHandle:
@@ -253,8 +247,8 @@ fn transform_in_place_rgb32( icc_profile_in : LCMS2ICCProfile,
     
     var result = LCMS2Context.new()
     if result:
-        var ctx = result.value()[]
-        result = transform_in_place_rgb32_context(ctx, icc_profile_in, icc_profile_out, pixels, num_pixels, pixel_format)
+        var ctx = result.value()
+        result = transform_in_place_rgb32_context(ctx[], icc_profile_in, icc_profile_out, pixels, num_pixels, pixel_format)
     return result
 
 fn transform_in_place_rgb32_context(ctx: LCMS2Context, 
@@ -285,23 +279,23 @@ fn transform_in_place_rgb32_context(ctx: LCMS2Context,
 fn validation_lcms2() raises:
     var aa = LCMS2Context.new()
     assert_true(aa)
-    var ctx = aa.value()[]
-    var profile1 = LCMS2ICCProfile.from_path(ctx, Path("icc_profiles/RTv4_sRGB.icc"))
+    var ctx = aa.value()
+    var profile1 = LCMS2ICCProfile.from_path(ctx[], Path("icc_profiles/RTv4_sRGB.icc"))
     assert_true(profile1)
-    var profile_srgb = profile1.value()[]
-    assert_equal(profile_srgb.get_info(ctx, LibLCMS2InfoType.description()), String("RTv4_sRGB"))
-    assert_equal(profile_srgb.get_info(ctx, LibLCMS2InfoType.manufacturer()), String("RawTherapee"))
-    assert_equal(profile_srgb.get_info(ctx, LibLCMS2InfoType.model()), String(""))
-    assert_equal(profile_srgb.get_info(ctx, LibLCMS2InfoType.copyright()), String("Copyright RawTherapee 2018, CC0"))
+    var profile_srgb = profile1.value()
+    assert_equal(profile_srgb[].get_info(ctx[], LibLCMS2InfoType.description()), String("RTv4_sRGB"))
+    assert_equal(profile_srgb[].get_info(ctx[], LibLCMS2InfoType.manufacturer()), String("RawTherapee"))
+    assert_equal(profile_srgb[].get_info(ctx[], LibLCMS2InfoType.model()), String(""))
+    assert_equal(profile_srgb[].get_info(ctx[], LibLCMS2InfoType.copyright()), String("Copyright RawTherapee 2018, CC0"))
 
     # DCI-P3 is a little to close to sRGB, visually it's sRGB with a better stauration
-    var profile2 = LCMS2ICCProfile.from_path(ctx, Path("test/RTv4_Rec2020.icc"))
+    var profile2 = LCMS2ICCProfile.from_path(ctx[], Path("test/RTv4_Rec2020.icc"))
     assert_true(profile2)
-    var profile_rec2020 = profile2.value()[]
-    assert_equal(profile_rec2020.get_info(ctx, LibLCMS2InfoType.description()), String("RTv4_Rec2020"))
-    assert_equal(profile_rec2020.get_info(ctx, LibLCMS2InfoType.manufacturer()), String("RawTherapee"))
-    assert_equal(profile_rec2020.get_info(ctx, LibLCMS2InfoType.model()), String(""))
-    assert_equal(profile_rec2020.get_info(ctx, LibLCMS2InfoType.copyright()), String("Copyright RawTherapee 2018, CC0"))
+    var profile_rec2020 = profile2.value()
+    assert_equal(profile_rec2020[].get_info(ctx[], LibLCMS2InfoType.description()), String("RTv4_Rec2020"))
+    assert_equal(profile_rec2020[].get_info(ctx[], LibLCMS2InfoType.manufacturer()), String("RawTherapee"))
+    assert_equal(profile_rec2020[].get_info(ctx[], LibLCMS2InfoType.model()), String(""))
+    assert_equal(profile_rec2020[].get_info(ctx[], LibLCMS2InfoType.copyright()), String("Copyright RawTherapee 2018, CC0"))
 
     var num_pixels = 9
     var pixels = DTypePointer[DType.uint8, AddressSpace.GENERIC]().alloc(num_pixels*4)
@@ -328,7 +322,7 @@ fn validation_lcms2() raises:
 
     # let's convert them to RGBA/sRGB
     # beware, Rec2020 is way wider than sRGB so we're gonna loose a bunch of things from a colorimetric point of view
-    var r = transform_in_place_rgb32_context(ctx, profile_rec2020, profile_srgb, pixels, num_pixels, LibLCMS2PixelFormat.rgba8() )
+    var r = transform_in_place_rgb32_context(ctx[], profile_rec2020[], profile_srgb[], pixels, num_pixels, LibLCMS2PixelFormat.rgba8() )
     assert_true(r)
     adr = 0
     assert_equal(pixels.load[width=4](adr), SIMD[DType.uint8,4](0,16,0,255))
@@ -351,7 +345,7 @@ fn validation_lcms2() raises:
     adr += 4
 
     # and then, back to RGBA/Rec2020. After what we had loose, it's not gonna be pretty (always from a colorimetric point of view)
-    r = transform_in_place_rgb32_context(ctx, profile_srgb, profile_rec2020, pixels, num_pixels, LibLCMS2PixelFormat.rgba8() )
+    r = transform_in_place_rgb32_context(ctx[], profile_srgb[], profile_rec2020[], pixels, num_pixels, LibLCMS2PixelFormat.rgba8() )
     assert_true(r)
     adr = 0
     assert_equal(pixels.load[width=4](adr), SIMD[DType.uint8,4](6,15,1,255))
@@ -373,7 +367,6 @@ fn validation_lcms2() raises:
     assert_equal(pixels.load[width=4](adr), SIMD[DType.uint8,4](127,127,127,255))
     adr += 4
 
-    ctx.close()
     pixels.free()    
 
 

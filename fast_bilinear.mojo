@@ -19,12 +19,6 @@ fn fast_bilinear(src : DTypePointer[DType.uint8,0], src_width : UInt32, src_heig
         If you want to downsize it by 2.5, you'll have to downsize it by 2 then ... then you'll have to use this function :-)
         It works in srgb colorspace, but for this kind of small reduction, it shouldn't be a big problem. 
         It's easy to to write a linear colorspace version, but the processing time will increase, obviously.
-        Input :
-            src
-            src_width
-            src_heigth
-            width or height (One of them or both)
-            if width<=0 or height<=0, it'll be recalculated to keep the aspect ratio
 
         returns :
             DTypePointer[DType.uint8,1]
